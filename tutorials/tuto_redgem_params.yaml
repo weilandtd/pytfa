@@ -8,29 +8,29 @@ core_subsystems:
     - 'Oxidative Phosphorylation'
 
 extracellular_system:
-    - DM_ac_e
-    - DM_etoh_e
-    - DM_glyc_e
-    - DM_lac-D_e
-    - DM_akg_e
-    - DM_for_e
-    - DM_pyr_e
-    - DM_fum_e
-    - DM_co2_e
-    - DM_mal-L_e
+    - ac_e
+    - etoh_e
+    - glyc_e
+    - lac-D_e
+    - akg_e
+    - for_e
+    - pyr_e
+    - fum_e
+    - co2_e
+    - mal-L_e
 
 biomass_rxns:
     - Ec_biomass_iJO1366_WT_53p95M
 
 # Define minimal growth to reach. If auto, sets to 95% of max TFA growth
-growth_rate: auto
+growth_rate: 'auto' # 0.8, 'auto'
 
 # Define the medium. Any other reaction will be kept as provided by the model
 medium:
-#    DM_cbl1_e: -0.01
-#    DM_glc_e: -8.16
-#    DM_glycogenn1_c: -10.0
-#    DM_bglycogenn1_c: -10.0
+    DM_cbl1_e: -0.01
+    DM_glc_e: -8.16
+    DM_glycogenn1_c: -10.0
+    DM_bglycogenn1_c: -10.0
 
 small_metabolites:
     - h_c
@@ -45,27 +45,71 @@ small_metabolites:
 inorganics: auto
 
 cofactor_pairs:
-    - ['atp_c', 'adp_c']
-    - ['nad_c', 'nadh_c']
-    - ['nadp_c', 'nadph_c']
+    - ['hxcoa_c','coa_c']
+    - ['ppcoa_c','coa_c']
+    - ['10fthf_c','thf_c']
+    - ['2dmmql8_c','2dmmq8_c']
+    - ['adpglc_c','adp_c']
+    - ['h2o_c','h_c']
+    - ['atp_c','adp_c']
+    - ['atp_c','amp_c']
+    - ['cdp_c','ctp_c']
+    - ['cmp_c','cdp_c']
+    - ['coa_c','accoa_c']
+    - ['coa_c','succoa_c']
+    - ['ctp_c','cmp_c']
+    - ['fad_c','fadh2_c']
+    - ['flxso_c','flxr_c']
+    - ['fmnh2_c','fmn_c']
+    - ['grxox_c','grxrd_c']
+    - ['gthrd_c','gthox_c']
+    - ['gtp_c','gdp_c']
+    - ['gtp_c','gmp_c']
+    - ['gtp_p','gdp_p']
+    - ['iscssh_c','iscs_c']
+    - ['itp_c','imp_c']
+    - ['malACP_c','ACP_c']
+    - ['malcoa_c','coa_c']
+    - ['mqn8_c','mql8_c']
+    - ['nadh_c','nad_c']
+    - ['nadph_c','nadp_c']
+    - ['no2_c','nh4_c']
+    - ['no2_e','nh4_e']
+    - ['no3_c','no2_c']
+    - ['no3_e','no2_e']
+    - ['o2_c','o2s_c']
+    - ['o2_e','o2s_e']
+    - ['pep_c','pyr_c']
+    - ['q8_c','q8h2_c']
+    - ['seramp_c','amp_c']
+    - ['thf_c','5mthf_c']
+    - ['trdrd_c','trdox_c']
+    - ['ump_c','udp_c']
+    - ['utp_c','ump_c']
+    - ['xtp_c','xdp_c']
+    - ['xtp_c','xmp_c']
 
 # Reduction parameters
-lump_method: Min+1 # OnePerBBB, Min, Min+p
+lump_method: OnePerBBB # OnePerBBB, Min, Min+p
 max_lumps_per_BBB: 2 # Only used if method = Min or Min+p
-remove_blocked_reactions: yes  # Remove reactions that cannot carry flux
+remove_blocked_reactions: no  # Remove reactions that cannot carry flux
                               # at the end of the reduction
 
-d: 2
-n: 2
+d: 0
+n: 0
 
 solver: auto
 force_solve: False
-timeout: 300
-feasibility: 1e-9
+bigM: 100
+solver_config:
+    timeout: 900
+    feasibility: 1e-9 #7
+    mip_gap_rel: 0.01 # Relative duality gap for finding lumps, 0 uses solver defaults
+    mip_gap_abs: 1 # Relative duality gap for finding lumps, 0 uses solver defaults
 
 # Optimisation shenanigans
 # Integer is faster with a good parallel solver, but might yield some numerical errors
 # Flux is slower but more reliable
 # Both is good if you can afford it
-constraint_method: both # flux, integer, or both.
+constraint_method: integer # flux, integer, or both.
 

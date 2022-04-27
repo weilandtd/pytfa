@@ -22,6 +22,7 @@ CPLEX = 'optlang-cplex'
 GUROBI = 'optlang-gurobi'
 GLPK = 'optlang-glpk'
 
+DEFAULT_EPS = 1e-5
 
 # Transforms (OnePerBBB --> oneperbbb), (one_per_bbb --> oneperbbb), etc ...
 disambiguate = lambda s:s.lower().replace('_','')
@@ -98,21 +99,30 @@ class LumpGEM:
             # If it's a BBB reaction
             if rxn.id in self.biomass_rxns:
                 self._rBBB.append(rxn)
+            # If we want to include this reaction in the lump add to non-core
+            elif rxn.id in self.include_in_lump:
+                self._rncore.append(rxn)
             # If it is an exchange reaction
             elif is_exchange(rxn):
                 self._exchanges.append(rxn)
+            # TECHNICALLY THIS IS REDUNDANT
+            # If it's a core reaction
+            # elif rxn.subsystem in self.core_subsystems:
+            #     self._rcore.append(rxn)
+            # # If it is part of the intrasubsystem expansion
+            elif rxn.id in additional_core_reactions:
+                self._rcore.append(rxn)
             # If it is a transport reaction
             elif check_transport_reaction(rxn):
                 self._transports.append(rxn)
-            # If it's a core reaction
-            elif rxn.subsystem in self.core_subsystems:
-                self._rcore.append(rxn)
-            # If it is part of the intrasubsystem expansion
-            elif rxn.id in additional_core_reactions:
-                self._rcore.append(rxn)
             # If it's neither BBB nor core, then it's non-core
             else:
                 self._rncore.append(rxn)
+
+        # Account for transports in lump
+        if self.transports_in_lump:
+            self._rncore.extend(self._transports)
+
 
         # Growth rate
         self._growth_rate = self.growth_rate
@@ -153,6 +163,20 @@ class LumpGEM:
         self.timeout_limit = self._param_dict["timeout"]
 
         self.constraint_method = self._param_dict["constraint_method"]
+
+        self.transports_in_lump = self._param_dict["transports_in_lump"]
+
+        if "exclude_from_lump" in self._param_dict:
+            self.exclude_from_lump = self._param_dict["exclude_from_lump"]
+        else:
+            self.exclude_from_lump = []
+
+        if "include_in_lump" in self._param_dict:
+            self.include_in_lump = self._param_dict["include_in_lump"]
+        else:
+            self.include_in_lump = []
+
+
 
     def _generate_usage_constraints(self):
         """
@@ -292,7 +316,11 @@ class LumpGEM:
         self._tfa_model.convert()
         # self._tfa_model.objective_direction = 'min'
 
-        epsilon = self._tfa_model.solver.configuration.tolerances.feasibility
+        try:
+            epsilon = self._tfa_model.solver.configuration.tolerances.feasibility
+        except AttributeError as e:
+            self._tfa_model.logger.error('{} does not support tolerance settings.'.format(self._tfa_model.solver))
+            epsilon = DEFAULT_EPS
 
         the_method = disambiguate(method)
         print('Lumping method detected: {}'.format(the_method))
@@ -337,7 +365,7 @@ class LumpGEM:
             if not lumped_reactions:
                 continue
 
-            lumps[met_BBB] = lumped_reactions
+            lumps[met_BBB.id] = lumped_reactions
 
             # Deactivating reaction by setting both bounds to 0
             sink.lower_bound = prev_lb
@@ -346,7 +374,7 @@ class LumpGEM:
         self.lumps = lumps
         return lumps
 
-    def _lump_one_per_bbb(self, met_BBB, sink, force_solve):
+    def _lump_one_per_bbb(self, met_BBB, sink, force_solve, minimize_subnet_fluxes=False):
         """
 
         :param met_BBB:
@@ -355,6 +383,15 @@ class LumpGEM:
         :return:
         """
 
+        # TODO Test if this Fs up sth and is there more efficient way to do this?
+        #Minimize fluxes in the subnetwork
+        if minimize_subnet_fluxes:
+            sum_fwd = symbol_sum([1.0*rxn.forward_variable for rxn in self._rncore])
+            sum_bwd = symbol_sum([1.0*rxn.reverse_variable for rxn in self._rncore])
+            self._tfa_model.objective = sum_fwd + sum_bwd
+            self._tfa_model.objective_direction = 'min'
+
+        # Find one solution
         n_da = self._tfa_model.slim_optimize()
 
         try:
@@ -391,7 +428,11 @@ class LumpGEM:
         :return:
         """
 
-        epsilon = self._tfa_model.solver.configuration.tolerances.integrality
+        try:
+            epsilon = self._tfa_model.solver.configuration.tolerances.integrality
+        except AttributeError as e:
+            self._tfa_model.logger.error('{} does not support tolerance settings.'.format(self._tfa_model.solver))
+            epsilon = DEFAULT_EPS
 
         try:
             max_lumps =self._param_dict['max_lumps_per_BBB']
@@ -475,8 +516,13 @@ class LumpGEM:
         :return:
         """
 
-        epsilon_int = self._tfa_model.solver.configuration.tolerances.integrality
-        epsilon_flux = self._tfa_model.solver.configuration.tolerances.feasibility
+        try:
+            epsilon_int = self._tfa_model.solver.configuration.tolerances.integrality
+            epsilon_flux = self._tfa_model.solver.configuration.tolerances.feasibility
+        except AttributeError:
+            self._tfa_model.logger.error('{} does not support tolerance settings.'.format(self._tfa_model.solver))
+            epsilon_int = DEFAULT_EPS
+            epsilon_flux = DEFAULT_EPS
 
         sigma = sink.flux
         lump_dict = dict()
@@ -484,6 +530,7 @@ class LumpGEM:
         for rxn in self._rncore:
             if self._activation_vars[rxn].variable.primal < epsilon_int:
                 lump_dict[rxn] = rxn.flux / sigma
+
         # lumped_reaction1 = sum([rxn * (flux / sigma)
         #                       for rxn, flux in lump_dict.items()])
 
@@ -495,11 +542,15 @@ class LumpGEM:
 
         lumped_reaction = sum_reactions(lump_dict,
                                         id_=sink.id.replace('Sink_', 'LUMP_'),
-                                        epsilon = epsilon_flux)
+                                        epsilon = epsilon_flux,
+                                        exclude = self.exclude_from_lump)
+
+
+
         return lumped_reaction
 
 
-def sum_reactions(rxn_dict, id_ = 'summed_reaction', epsilon = 1e-9):
+def sum_reactions(rxn_dict, id_ = 'summed_reaction', epsilon=1e-9, exclude=()):
     """
     Keys are reactions
     Values are their multiplicative coefficient
@@ -507,6 +558,9 @@ def sum_reactions(rxn_dict, id_ = 'summed_reaction', epsilon = 1e-9):
     stoich = defaultdict(int)
 
     for rxn,flux in rxn_dict.items():
+        if rxn.id in exclude:
+            continue
+
         for x, coeff in rxn.metabolites.items():
             stoich[x.id] += coeff * flux
 
@@ -514,6 +568,7 @@ def sum_reactions(rxn_dict, id_ = 'summed_reaction', epsilon = 1e-9):
 
     gpr = ('(' + gpr + ')') if gpr else ''
 
+    # This could be an issue and should be refined
     stoich = trim_epsilon_mets(stoich, epsilon=epsilon)
 
     new = Lump(id_ = id_,

@@ -109,17 +109,27 @@ class RedGEM():
 
         force_solve = self.params["force_solve"]
         timeout = self.params["timeout"]
-        self._gem.solver.configuration.tolerances.feasibility = self.params["feasibility"]
-        self._gem.solver.configuration.tolerances.integrality = self.params["feasibility"]
-        self._source_gem.solver.configuration.tolerances.feasibility = self.params["feasibility"]
-        self._source_gem.solver.configuration.tolerances.integrality = self.params["feasibility"]
+        try:
+            self._gem.solver.configuration.tolerances.feasibility = self.params["feasibility"]
+            self._gem.solver.configuration.tolerances.integrality = self.params["feasibility"]
+        except AttributeError as e:
+            self.logger.error('Solver {} is not compatible with tolerance parameters'.format(self._gem.solver))
+        try:
+            self._source_gem.solver.configuration.tolerances.feasibility = self.params["feasibility"]
+            self._source_gem.solver.configuration.tolerances.integrality = self.params["feasibility"]
+        except AttributeError as e:
+            self.logger.error('Solver {} is not compatible with tolerance parameters'.format(self._source_gem.solver))
 
         self.logger.info("Computing network expansion...")
         expander = NetworkExpansion(self._gem, core_subsystems, extracellular_system,
                                     cofactors, small_metabolites, inorganics,
                                     d, n)
-        reduced_gem = expander.run()
+        reduced_gem = expander.run(self.params["additional_reactions"])
+
         self.logger.info("Done.")
+
+        # For debugging purposes
+        self.expander = expander
 
         # Add the expansion to core reactions
         core_reactions = reduced_gem.reactions
@@ -130,11 +140,19 @@ class RedGEM():
         self.logger.info("Done.")
 
         self.logger.info("Create final network...")
+
+        # if self.params['transports_in_lump']:
+        #     to_add = [x for x in biomass_rxns
+        #               + lumper._exchanges
+        #               + lumper._rcore
+        #               if not x.id in reduced_gem.reactions]
+        # else:
         to_add = [x for x in biomass_rxns
-                            +lumper._exchanges
-                            +lumper._transports
-                            +lumper._rcore
-                  if not x.id in reduced_gem.reactions]
+                        +lumper._exchanges
+                        +lumper._transports
+                        +lumper._rcore
+              if not x.id in reduced_gem.reactions]
+
         reduced_gem.add_reactions(to_add)
 
         for rxns in lumps.values():
@@ -144,7 +162,13 @@ class RedGEM():
         self.logger.info("Done.")
 
         reduced_gem.objective = main_bio_rxn
-        reduced_gem.reactions.get_by_id(main_bio_rxn.id).lower_bound = growth_rate
+        self.logger.info('Testing reduced model')
+        sol = reduced_gem.optimize()
+        self.logger.info('Reduced model growth with {}'.format(sol.objective_value) )
+        if sol.objective_value == 0:
+            raise ValueError("Reduced model doesn't grow")
+        # I dont think we want this... avoid tivial solution
+        reduced_gem.reactions.get_by_id(main_bio_rxn.id).lower_bound = 0
 
         if self.params['remove_blocked_reactions']:
             self.logger.info('Detecting blocked reactions')

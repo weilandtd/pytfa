@@ -400,6 +400,20 @@ class BinaryVariable(GenericVariable):
 
     prefix = 'B_'
 
+class IntegerVariable(GenericVariable):
+    """
+    Class to represent a generic binary variable
+    """
+
+    def __init__(self, id_, model, **kwargs):
+        GenericVariable.__init__(self,
+                                 id_,
+                                 model = model,
+                                 type='integer',
+                                 **kwargs)
+    prefix = 'I_'
+
+
 class ReactionVariable(GenericVariable):
     """
     Class to represent a variable attached to a reaction
@@ -454,7 +468,6 @@ class MetaboliteVariable(GenericVariable):
 
     prefix = 'MV_'
 
-
 class ForwardUseVariable(ReactionVariable, BinaryVariable):
     """
     Class to represent a forward use variable, a type of binary variable used to
@@ -486,6 +499,24 @@ class BackwardUseVariable(ReactionVariable, BinaryVariable):
 
     prefix = 'BU_'
 
+class ForwardBackwardUseVariable(ReactionVariable, BinaryVariable):
+    """
+    Class to represent a type of binary variable used to tell whether the
+    reaction is active or not such that:
+        FU + BU + BFUSE = 1
+    """
+
+    def __init__(self, reaction, **kwargs):
+        if not 'lb' in kwargs:
+            kwargs['lb'] = 0
+        if not 'ub' in kwargs:
+            kwargs['ub'] = 1
+
+        ReactionVariable.__init__(self, reaction,
+                                  type=get_binary_type(),
+                                  **kwargs)
+
+    prefix = 'BFUSE_'
 
 class LogConcentration(MetaboliteVariable):
     """
@@ -494,14 +525,12 @@ class LogConcentration(MetaboliteVariable):
 
     prefix = 'LC_'
 
-
 class DeltaGErr(ReactionVariable):
     """
     Class to represent a DeltaGErr
     """
 
     prefix = 'DGE_'
-
 
 class DeltaG(ReactionVariable):
     """
@@ -510,6 +539,19 @@ class DeltaG(ReactionVariable):
 
     prefix = 'DG_'
 
+class ThermoPotential(MetaboliteVariable):
+    """
+    Class to represent a DeltaG
+    """
+
+    prefix = 'P_'
+
+class DeltaGFormstd(MetaboliteVariable):
+    """
+    Class to represent a DeltaGstf of formation
+    """
+
+    prefix = 'DGoF_'
 
 class DeltaGstd(ReactionVariable):
     """
@@ -536,7 +578,6 @@ class PosSlackVariable(ReactionVariable):
 
     prefix = 'PosSlack_'
 
-
 class NegSlackVariable(ReactionVariable):
     """
     Class to represent a negative slack variable for relaxation problems
@@ -547,6 +588,32 @@ class NegSlackVariable(ReactionVariable):
 
     prefix = 'NegSlack_'
 
+
+class PosSlackVariableInt(ReactionVariable, IntegerVariable):
+    """
+    Class to represent a postive slack variable for relaxation problems using integer
+    enforce forward directionality in reaction net fluxes
+    """
+
+    def __init__(self, reaction, **kwargs):
+        ReactionVariable.__init__(self, reaction,
+                                  type='integer',
+                                  **kwargs)
+    prefix = 'PosSlackInt_'
+
+class NegSlackVariableInt(ReactionVariable, IntegerVariable):
+    """
+    Class to represent a postive slack variable for relaxation problems using integer
+    enforce forward directionality in reaction net fluxes
+    """
+
+    def __init__(self, reaction, **kwargs):
+        ReactionVariable.__init__(self, reaction,
+                                  type='integer',
+                                  **kwargs)
+    prefix = 'NegSlackInt_'
+
+
 class PosSlackLC(MetaboliteVariable):
 
     prefix = 'PosSlackLC_'
@@ -555,3 +622,9 @@ class NegSlackLC(MetaboliteVariable):
 
     prefix = 'NegSlackLC_'
 
+class LinearizationVariable(ModelVariable):
+    """
+    Class to represent a product A*B when performing linearization of the
+    model
+    """
+    prefix = 'LZ_'

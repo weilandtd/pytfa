@@ -28,10 +28,10 @@ from .utils import check_reaction_balance, check_transport_reaction, \
 from ..optim.constraints import SimultaneousUse, NegativeDeltaG, \
     BackwardDeltaGCoupling, ForwardDeltaGCoupling, BackwardDirectionCoupling, \
     ForwardDirectionCoupling, ReactionConstraint, MetaboliteConstraint, \
-    DisplacementCoupling
+    DisplacementCoupling, PotentialConstraint, PotentialCoupling
 from ..optim.variables import ThermoDisplacement, DeltaGstd, DeltaG, \
     ForwardUseVariable, BackwardUseVariable, LogConcentration, \
-    ReactionVariable, MetaboliteVariable
+    ReactionVariable, MetaboliteVariable, ThermoPotential, DeltaGFormstd
 from ..utils import numerics
 from ..utils.logger import get_bistream_logger
 
@@ -112,6 +112,7 @@ class ThermoModel(LCSBModel, Model):
                 new_metabolites = {k:-v+v/max_stoichiometry \
                                    for k,v in metabolites.items()}
                 this_reaction.add_metabolites(new_metabolites)
+                this_reaction.bounds *= max_stoichiometry
             else:
                 continue
 
@@ -154,15 +155,7 @@ class ThermoModel(LCSBModel, Model):
                                       self.Debye_Huckel_B,
                                       self.thermo_unit)
 
-    def _prepare_reaction(self,reaction, null_error_override=2):
-        """
-
-        :param reaction:
-        :param null_error_override: overrides DeltaG when it is 0 to
-                                    allow flexibility. 2kcal/mol is standard in
-                                    estimation frameworks like GCM.
-        :return:
-        """
+    def _prepare_reaction(self,reaction):
         DeltaGrxn = 0
         DeltaGRerr = 0
         proton_of = self._proton_of
@@ -223,6 +216,8 @@ class ThermoModel(LCSBModel, Model):
                 reaction.thermo['deltaGR'] = rhs
 
                 reaction.thermo['deltaGrxn'] = breakdown['sum_deltaGFis']
+                # Add for potential formulation
+                reaction.thermo['breakdown'] = breakdown
             else:
                 for met in reaction.metabolites:
                     if (met.formula != 'H'
@@ -239,21 +234,17 @@ class ThermoModel(LCSBModel, Model):
             (tmp1, DeltaGRerr, tmp2, tmp3) = calcDGR_cues(reaction,
                                                           self.reaction_cues_data)
 
-            if DeltaGRerr == 0 and null_error_override:
-                DeltaGRerr = null_error_override  # default value for DeltaGRerr
+            if DeltaGRerr == 0:
+                DeltaGRerr = 2  # default value for DeltaGRerr
 
             reaction.thermo['deltaGRerr'] = DeltaGRerr
 
-    def prepare(self, null_error_override = 2):
+    def prepare(self):
         """ Prepares a COBRA toolbox cobra_model for TFBA analysis by doing the following:
 
            1. checks if a reaction is a transport reaction
            2. checks the ReactionDB for Gibbs energies of formation of metabolites
            3. computes the Gibbs energies of reactions
-           
-        :param null_error_override: overrides DeltaG when it is 0 to
-                                    allow flexibility. 2kcal/mol is standard in
-                                    estimation frameworks like GCM.
 
         """
 
@@ -291,7 +282,7 @@ class ThermoModel(LCSBModel, Model):
         # Iterate over each reaction
         for i in range(num_rxns):
             reaction = self.reactions[i]
-            self._prepare_reaction(reaction, null_error_override)
+            self._prepare_reaction(reaction)
 
         self.logger.info('# Model preparation done.')
 
@@ -313,6 +304,7 @@ class ThermoModel(LCSBModel, Model):
         # P_met: P_met - RT*LC_met = DGF_met
         metformula = met.formula
         metDeltaGF = met.thermo.deltaGf_tr
+        metDEltaGFerr = met.thermo.deltaGf_err
         metComp = met.compartment
         metLConc_lb = log(self.compartments[metComp]['c_min'])
         metLConc_ub = log(self.compartments[metComp]['c_max'])
@@ -342,17 +334,28 @@ class ThermoModel(LCSBModel, Model):
                                     lb=metLConc_lb,
                                     ub=metLConc_ub)
 
+
             if add_potentials:
-                P = self.add_variable( 'P_' + met.id, P_lb, P_ub)
+                DGOF = self.add_variable(DeltaGFormstd,
+                                      met,
+                                      lb= -BIGM,
+                                      ub=  BIGM)
+
+                self.DGoF_vars[met] = DGOF
+
+                P = self.add_variable(ThermoPotential,
+                                      met,
+                                      lb=P_lb,
+                                      ub=P_ub)
+
                 self.P_vars[met] = P
                 # Formulate the constraint
-                expr = P - self.RT * LC
+                expr = self.RT * LC + DGOF - P
                 self.add_constraint(
-                               LogConcentration,
-                               'P_' + met.id,
+                               PotentialConstraint,
+                               met,
                                expr,
-                               metDeltaGF,
-                               metDeltaGF)
+                               lb=0, ub=0)
 
         else:
             self.logger.debug('NOT generating thermo variables for {}'.format(met.id))
@@ -415,6 +418,7 @@ class ThermoModel(LCSBModel, Model):
             LC_TransMet = 0
             LC_ChemMet = 0
             P_expr = 0
+            DGoF_expr = 0
 
             if rxn.thermo['isTrans']:
                 # calculate the DG component associated to transport of the
@@ -437,6 +441,9 @@ class ThermoModel(LCSBModel, Model):
                                             * trans['coeff']
                                             * (
                                                 -1 if type_ == 'reactant' else 1))
+                            if add_potentials:
+                                DGoF_expr += (self.DGoF_vars[trans[type_]] * trans['coeff']
+                                           * (-1 if type_ == 'reactant' else 1))
 
                         chem_stoich[trans[type_]] += (trans['coeff']
                                                      * (
@@ -451,31 +458,22 @@ class ThermoModel(LCSBModel, Model):
                     if metFormula not in ['H', 'H2O']:
                         LC_ChemMet += self.LC_vars[met] * RT * chem_stoich[met]
 
+                        if add_potentials:
+                            DGoF_expr += self.DGoF_vars[met] * rxn.metabolites[met]
+
             else:
                 # if it is just a regular chemical reaction
-                if add_potentials:
-                    RHS_DG = 0
+                for met in rxn.metabolites:
+                    metformula = met.formula
+                    if metformula not in ['H', 'H2O']:
+                        # we use the LC here as we already accounted for the
+                        # changes in deltaGFs in the RHS term
+                        LC_ChemMet += (self.LC_vars[met]
+                                       * RT
+                                       * rxn.metabolites[met])
 
-                    for met in rxn.metabolites:
-                        metformula = met.formula
-                        metDeltaGFtr = met.thermo.deltaGf_tr
-                        if metformula == 'H2O':
-                            RHS_DG = (RHS_DG
-                                      + rxn.metabolites[met] * metDeltaGFtr)
-                        elif metformula != 'H':
-                            P_expr += self.P_vars[met] * rxn.metabolites[met]
-                else:
-                    # RxnDGnaught on the right hand side
-                    RHS_DG = rxn.thermo['deltaGR']
-
-                    for met in rxn.metabolites:
-                        metformula = met.formula
-                        if metformula not in ['H', 'H2O']:
-                            # we use the LC here as we already accounted for the
-                            # changes in deltaGFs in the RHS term
-                            LC_ChemMet += (self.LC_vars[met]
-                                           * RT
-                                           * rxn.metabolites[met])
+                        if add_potentials:
+                            DGoF_expr += self.DGoF_vars[met] * rxn.metabolites[met]
 
 
 
@@ -505,27 +503,55 @@ class ThermoModel(LCSBModel, Model):
                                     lb=0,
                                     ub=0)
 
+            # TODO: we need an exeption for transport reactions that also add the
+            # Tansport potetnial
+            if add_potentials:
+                expr = DGoR - DGoF_expr
+
+                if rxn.thermo['isTrans']:
+                    RT_sum_H_LC_tpt = rxn.thermo['breakdown']['RT_sum_H_LC_tpt']
+                    sum_F_memP_charge = rxn.thermo['breakdown']['sum_F_memP_charge']
+                    sum_stoich_NH = rxn.thermo['breakdown']['sum_stoich_NH']
+
+                    RHS = sum_F_memP_charge + RT_sum_H_LC_tpt + sum_stoich_NH
+
+                    self.add_constraint(PotentialCoupling,
+                                        rxn,
+                                        expr,
+                                        lb=RHS,
+                                        ub=RHS,)
+
+                else:
+                    self.add_constraint(PotentialCoupling,
+                                        rxn,
+                                        expr,
+                                        lb=0,
+                                        ub=0)
+
 
             # Create the use variables constraints and connect them to the
             # deltaG if the reaction has thermo constraints
+
+            # Note DW: implementing suggestions of maria
             # FU_rxn: 1000 FU_rxn + DGR_rxn < 1000 - epsilon
             FU_rxn = self.add_variable(ForwardUseVariable, rxn)
 
             CLHS = DGR + FU_rxn * BIGM_THERMO
+
             self.add_constraint(ForwardDeltaGCoupling,
                                 rxn,
                                 CLHS,
-                                ub=BIGM_THERMO - epsilon)
+                                ub=BIGM_THERMO - epsilon*1e3)
 
             # BU_rxn: 1000 BU_rxn - DGR_rxn < 1000 - epsilon
             BU_rxn = self.add_variable(BackwardUseVariable, rxn)
 
             CLHS = BU_rxn * BIGM_THERMO - DGR
+
             self.add_constraint(BackwardDeltaGCoupling,
                                 rxn,
                                 CLHS,
-                                ub=BIGM_THERMO - epsilon)
-
+                                ub=BIGM_THERMO - epsilon*1e3)
 
         else:
             if not NotDrain:
@@ -614,6 +640,7 @@ class ThermoModel(LCSBModel, Model):
 
         self.LC_vars = {}
         self.P_vars = {}
+        self.DGoF_vars = {}
 
         for met in self.metabolites:
             self._convert_metabolite(met, add_potentials, verbose)
@@ -643,7 +670,7 @@ class ThermoModel(LCSBModel, Model):
             LCSBModel.print_info(self)
 
         n_metabolites   = len(self.metabolites)
-        n_reactions     = len(self.reactions)
+        n_reactions     = len([r for r in self.reactions if not r in self.boundary])
         n_metabolites_thermo = len([x for x in self.metabolites \
                                     if hasattr(x, 'thermo') and x.thermo['id']])
         n_reactions_thermo   = len([x for x in self.reactions if
