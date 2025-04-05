@@ -400,6 +400,20 @@ class BinaryVariable(GenericVariable):
 
     prefix = 'B_'
 
+class IntegerVariable(GenericVariable):
+    """
+    Class to represent a generic binary variable
+    """
+
+    def __init__(self, id_, model, **kwargs):
+        GenericVariable.__init__(self,
+                                 id_,
+                                 model = model,
+                                 type='integer',
+                                 **kwargs)
+    prefix = 'I_'
+
+
 class ReactionVariable(GenericVariable):
     """
     Class to represent a variable attached to a reaction
@@ -525,6 +539,20 @@ class DeltaG(ReactionVariable):
 
     prefix = 'DG_'
 
+class ThermoPotential(MetaboliteVariable):
+    """
+    Class to represent a DeltaG
+    """
+
+    prefix = 'P_'
+
+class DeltaGFormstd(MetaboliteVariable):
+    """
+    Class to represent a DeltaGstf of formation
+    """
+
+    prefix = 'DGoF_'
+
 class DeltaGstd(ReactionVariable):
     """
     Class to represent a DeltaG^o (naught) - standard conditions
@@ -559,6 +587,32 @@ class NegSlackVariable(ReactionVariable):
         ReactionVariable.__init__(self, reaction, **kwargs)
 
     prefix = 'NegSlack_'
+
+
+class PosSlackVariableInt(ReactionVariable, IntegerVariable):
+    """
+    Class to represent a postive slack variable for relaxation problems using integer
+    enforce forward directionality in reaction net fluxes
+    """
+
+    def __init__(self, reaction, **kwargs):
+        ReactionVariable.__init__(self, reaction,
+                                  type='integer',
+                                  **kwargs)
+    prefix = 'PosSlackInt_'
+
+class NegSlackVariableInt(ReactionVariable, IntegerVariable):
+    """
+    Class to represent a postive slack variable for relaxation problems using integer
+    enforce forward directionality in reaction net fluxes
+    """
+
+    def __init__(self, reaction, **kwargs):
+        ReactionVariable.__init__(self, reaction,
+                                  type='integer',
+                                  **kwargs)
+    prefix = 'NegSlackInt_'
+
 
 class PosSlackLC(MetaboliteVariable):
 

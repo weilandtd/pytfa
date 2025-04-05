@@ -74,7 +74,7 @@ def calcDGtpt_rhs(reaction, compartmentsData, thermo_units):
 
     for seed_id in transportedMets:
         for metType in ['reactant', 'product']:
-            if seed_id != 'cpd00001':
+            if seed_id != 'cpd00001' and seed_id != CPD_PROTON:
                 met = transportedMets[seed_id][metType]
                 pH_comp = met.thermo.pH
                 ionicStr_comp = met.thermo.ionicStr

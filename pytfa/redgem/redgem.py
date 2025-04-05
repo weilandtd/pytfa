@@ -124,8 +124,12 @@ class RedGEM():
         expander = NetworkExpansion(self._gem, core_subsystems, extracellular_system,
                                     cofactors, small_metabolites, inorganics,
                                     d, n)
-        reduced_gem = expander.run()
+        reduced_gem = expander.run(self.params["additional_reactions"])
+
         self.logger.info("Done.")
+
+        # For debugging purposes
+        self.expander = expander
 
         # Add the expansion to core reactions
         core_reactions = reduced_gem.reactions
@@ -136,11 +140,19 @@ class RedGEM():
         self.logger.info("Done.")
 
         self.logger.info("Create final network...")
+
+        # if self.params['transports_in_lump']:
+        #     to_add = [x for x in biomass_rxns
+        #               + lumper._exchanges
+        #               + lumper._rcore
+        #               if not x.id in reduced_gem.reactions]
+        # else:
         to_add = [x for x in biomass_rxns
-                            +lumper._exchanges
-                            +lumper._transports
-                            +lumper._rcore
-                  if not x.id in reduced_gem.reactions]
+                        +lumper._exchanges
+                        +lumper._transports
+                        +lumper._rcore
+              if not x.id in reduced_gem.reactions]
+
         reduced_gem.add_reactions(to_add)
 
         for rxns in lumps.values():
@@ -150,7 +162,13 @@ class RedGEM():
         self.logger.info("Done.")
 
         reduced_gem.objective = main_bio_rxn
-        reduced_gem.reactions.get_by_id(main_bio_rxn.id).lower_bound = growth_rate
+        self.logger.info('Testing reduced model')
+        sol = reduced_gem.optimize()
+        self.logger.info('Reduced model growth with {}'.format(sol.objective_value) )
+        if sol.objective_value == 0:
+            raise ValueError("Reduced model doesn't grow")
+        # I dont think we want this... avoid tivial solution
+        reduced_gem.reactions.get_by_id(main_bio_rxn.id).lower_bound = 0
 
         if self.params['remove_blocked_reactions']:
             self.logger.info('Detecting blocked reactions')
